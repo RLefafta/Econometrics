@@ -1,0 +1,545 @@
+---
+title: | 
+  | Regression Models on  
+  | Rand Health Insurance data
+author: 'Djawed Mancer, Lefafta Rémi'
+header-includes: 
+  - \usepackage{float}
+  - \usepackage{booktabs}
+  - \usepackage{colortbl}
+output:
+  pdf_document:
+    latex_engine: pdflatex
+    toc: true
+    number_section: yes
+    keep_tex: yes
+    df_print: kable
+    dev: png
+    
+editor_options:
+  chunk_output_type: inline
+---
+
+```{r setup, echo=FALSE}
+knitr::opts_chunk$set(echo = FALSE, message = FALSE, warning = FALSE,
+                      sanitize = TRUE, fig.align="center", cache=TRUE)
+```
+
+```{r, warning = F}
+library(dplyr)
+library(knitr)
+library(kableExtra)
+library(ggplot2)
+library(haven)
+library(AER)
+library(stargazer)
+library(MASS)
+library(pscl)
+library(data.table)
+library(questionr)
+library(Metrics)
+```
+
+\newpage
+
+```{r}
+setwd("C:/Users/remil/Desktop/M2/Mesure&Perf/Projet")
+```
+
+
+```{r}
+data <- read_dta(file = "mus18data.dta")
+data <- as.data.frame(data)
+```
+
+
+
+```{r, keep only some variables}
+data <- data %>% dplyr::select(
+  mdu, lcoins, idp, linc, female, educdec, age, black, hlthg, hlthf, hlthp) 
+```
+
+
+```{r, include = FALSE}
+unique(data$black) # mal codé
+unique(data$idp)
+unique(data$female)
+
+```
+
+```{r, recodage black}
+data <- data %>% mutate(black = ifelse(black < 1, 0, 1))
+```
+
+
+```{r}
+data$black <- as.factor(data$black)
+data$idp <- as.factor(data$idp)
+data$female <- as.factor(data$female)
+```
+
+
+
+```{r, include = FALSE}
+quant<-sapply(data,is.numeric)
+quantvar=data[,quant]
+quantvar <- quantvar[, -c(6:8)]
+colnames(quantvar)
+```
+```{r}
+f<-function(quantvar)c(Max=min(quantvar), Min=max(quantvar),
+                       Mean=mean(quantvar), Median=median(quantvar),
+                       Sd=sd(quantvar), Var=var(quantvar))
+```
+
+```{r, include = F}
+quantitative<-setDT(quantvar)[,sapply(.SD,f)]
+quantitative
+```
+# Introduction
+
+The dataset come from the Rand Health Insurance Experiment, the goal of the experiment was to assess how the patient's use of health services depend on health insurance types. In the following work, we will use the variable `mdu` which is the number of outpatient visits to a medical doctor as our dependent variable. The datasets includesmany variables, but we will use only a subset of them. Moreover, we work on 20186 observations. \
+
+Table 1 shows a short summary of our quantitative variables.
+
+```{r}
+round(quantitative, 2) %>% 
+  kable(format = "latex", align = "c", caption = "Quantitative variable summary") %>% 
+  kable_styling(latex_options = c("bordered","striped", "hover", "HOLD_position"), fixed_thead = T)
+ 
+```
+
+The following figure shows how our dependent variable is distributed. As we see, there is an important amount of zeroes. Indeed, for more than 6000 observations `mdu` take zero as value. This excess of zeroes will be taken into account in the last part.
+
+```{r}
+p <- data %>% 
+      ggplot(aes(x = mdu)) +
+      geom_bar(fill = "lightblue", color = "darkblue") +
+      labs(title = "Number of outpatients visits to a doctor")
+
+p + xlab("Number of visits") + ylab("Count")
+
+```
+
+# Poisson regression model
+
+We estimate a Poisson regression model as follow :
+$$ mdu = \beta_{0} + lcoins\beta_{1} + idp\beta_{2} + linc\beta_{3} + female\beta_{4} + edycdec\beta_{5} + age\beta_{6} + bkack\beta_{7} + hlthg\beta_{8} + hlthf\beta_{9} + hlthp\beta_{10} $$
+
+```{r}
+reg <- glm(mdu ~ lcoins + idp + linc + female + educdec + age + black + hlthg + hlthf + hlthp, data = data, family = poisson )
+```
+
+
+
+```{r, include = F}
+stargazer(reg, type = "latex")
+```
+The results are shown in table 6.
+All of our estimated coefficients are statistically significant at 1\%, except for the intercept one. Most of them are positive, excluding `lcoins`, `idp` and `black`. Even if the intercept coefficient is not significant, it represents the predicted number of visits to a doctor for a white male whom self-rated health is excellent and without an individual deductible plan who had average levels of income and coinsurance. In order to interpret this value, we must use the exponentiate, which gives us $exp(0.079) \approx 1.08$. Then, for the enunciated characteristics, the average visit to the doctor is $1.08$. Regarding the coefficient associated with `black` which is negative, indicate that the average number of visits to the doctor is smaller for black people than others people. For the `family income` variable, the regression coefficient is $0.072$ which represents a $exp(0.072) = 1.07$ increases in medical visits when `family income` increases by 1 for the average individual.
+
+
+We can check if some variables have no effect on our dependent variable. We will perform a likelihood ratio test in order to compare the full model with a reduce model which does not include `lcoins` and `ldp`.
+
+First, we must estimate a new Poisson regression model without these variables.
+
+```{r}
+reg2 <- glm(mdu ~ linc + female + educdec + age + black + hlthg + hlthf + hlthp, data = data, family = poisson)
+```
+
+```{r, include = F}
+stargazer(reg2, type = "text")
+```
+
+Then we compute the likelihood ratio test. The null hypothesis is that `lcoins` and `ldp` have no impact on `mdu`.
+The Chi-Squared value is 1589.8 and the p-value is inferior to 0.05. We reject the null hypothesis and we keep our first Poisson regression model which is better.
+
+```{r}
+lrtest(reg, reg2) %>% 
+  kable(format = "latex", align = "c", caption = "Likelihood ratio test") %>% 
+  kable_styling(latex_options = c("bordered","striped", "hover", "HOLD_position"), fixed_thead = T)
+```
+
+
+# Goodness of fit 
+
+## Deviance statistic
+
+There are many ways to evaluate the goodness of fit of the Poisson regression model based.
+First, we will look at deviance statistics. The deviance statistic is defined by : 
+$$D = 2 \sum^{n}_{i=1} y_{i} ~ ln\frac{yi}{\hat{\lambda_{i}}}-(y_{i}-\hat{\lambda_{i}})$$
+with $y_{i}$ the observed values for `mdu` and $\hat{\lambda_{i}}$ the fitted values from our model.
+
+We find $D = 82912.06$
+
+```{r, include = F}
+f_v <- reg$fitted.values
+
+dev <- 2 * sum(ifelse(
+                     data$mdu > 0, data$mdu * log (data$mdu / f_v), 0)
+                     -(data$mdu - f_v))
+```
+
+```{r, include = F}
+dev
+reg$deviance
+```
+
+In order to calculate the p-value for the deviance goodness of fit test, we calculate the probability to the right deviance value for the chi-squared distribution on 20176 degrees of freedom. \
+The p-value is 0, then the null hypothesis that our model is correctly specified is rejected at 5\% risk. The fitted values significantly differ from the observed values.
+
+```{r, include = F}
+pchisq(reg$deviance, df = reg$df.residual, lower.tail = FALSE) # df = df$residual works aswell
+```
+
+## Pseudo-$R^2$
+
+Secondly, we will look at pseudo-$R^2$, which is different from the traditional $R^2$. Here, it represents the improvement of our model compared to the null model (intercept only). After calculate, we find a pseudo-$R^2 = 10\%$.
+
+```{r, include = F}
+R2 <- 1 - (reg$deviance / reg$null.deviance)
+R2
+```
+The deviance is reduced by 10\% compared to the null model. The improvement of our model is not that good compared to the null model.
+
+
+# Overdispersion 
+
+The overdispersion means that the variance is larger than the mean. One of the main assumption in a Poisson regression model is the equality between the mean and the variance of the dependent variable. However, this assumption is pretty strong and often not respected which lead to the estimation of wrong coefficients. We must do an overdispersion test in order to verify that.
+
+\begin{align} 
+   &H_{0} : \alpha = 0 \\
+   &H_{1} : \alpha > 0 
+\end{align}
+
+
+First, thanks to the Poisson model regression, we have $\hat{\lambda_{i}} = e^{X_{i}\hat{\beta}}$ which correspond to the fitted values of our model.
+Secondly, the coefficient $\alpha$ can be estimated by an auxiliary OLS regression. The dependent variable is given by the following expression : $Y = \frac{[(Y_{i} - \lambda_{i})^2 - Y_{i}]}{\lambda_{i}}$ with $Y_{i}$ the observed values for observation $i$. For the predictor variable, we have $X = \alpha\frac{g(\lambda_{i})}{\lambda_{i}}$. Then, we are estimating this OLS : $Y = X + u_{i}$.
+We will use different variance formulations, $g(\lambda_{i}) = \lambda$ and $g(\lambda_{i}) = \lambda^2$.
+
+Starting with $g(\lambda_{i}) = \lambda$.
+
+```{r}
+Y_1 = ((data$mdu - reg$fitted.values)^2 - data$mdu) / reg$fitted.values
+alpha = reg$fitted.values/reg$fitted.values
+```
+
+```{r}
+reg_dp <- lm(Y_1 ~ alpha - 1, data = data)
+```
+
+```{r, include = F}
+summary(reg_dp)
+```
+
+
+```{r, include = F}
+stargazer(reg_dp, type = "text")
+```
+We reject the null hypothesis if t value is superior to $1.96$. The t value is calculated as follows : $t = \frac{5.381 - 0}{0.286} = 18.81$. 
+
+```{r, include = F}
+t <- (5.381 - 0)/0.286
+t
+```
+We reject $H_{0}$, $\alpha$ is positive, statistically significant at 5\% and equal to $5.407$ which confirm the presence of overdispersion in our data.
+
+Alternatively, we can use the command dispersiontest from AER for estimating $\alpha$. The dispersion test gives us $\alpha = 5.38$, this confirms our precedent result.
+
+```{r, include = F}
+dispersiontest(reg, trafo = 1)
+```
+
+
+Carry on with $g(\lambda_{i}) = \lambda^2$
+
+
+```{r}
+#lambda ^2
+
+Y_2 = ((data$mdu - reg$fitted.values)^2 - data$mdu) / reg$fitted.values
+alpha_2 = (reg$fitted.values)^2/reg$fitted.values
+```
+
+
+```{r}
+reg_dp_2 <- lm(Y_2 ~ alpha_2 - 1, data = data)
+```
+
+```{r, include = F}
+stargazer(reg_dp_2, type = 'text')
+```
+As for the previous case, t value $= 18.21 > 1.96$ we reject $H_{0}$.
+
+```{r, include = F}
+t_2 <- (1.676 - 0)/0.092
+t_2
+```
+We reject the null hypothesis, $\alpha$ is positive, statistically significant at 5\% and equal to $1.676$ which confirm the presence of overdispersion in our data. This result is confirmed by the overdispersion test from AER
+
+
+```{r, include = F}
+dispersiontest(reg, trafo = 2)
+```
+
+The results show that using $g(\lambda_{i}) = \lambda_{i}^{2}$ is better. Indeed, $\alpha$ is closer to 0 in our second case, which mean that overdispersion is smaller with this kind of variance formulation. However, Poisson regression model is not the best model due to the presence of overdispersion. Following this, we will estimate different regression model.
+
+
+
+# Negative Binomial Model
+
+The negative binomial model relax the assumption made in the Poisson model by introducing a fixed unobserved effect in the conditional mean. 
+
+```{r, include = F}
+reg_nb <- glm.nb(mdu ~ lcoins + idp + linc + female + educdec + age + black + hlthg + hlthf + hlthp, data = data)
+```
+
+```{r, include = F}
+summary(reg_nb)
+```
+
+The regression results are in table 6. 
+
+## Overdispersion
+
+By estimating this model, we have a $\theta$ parameter representing the inverse of the $\alpha$ parameter previously found in the overdispersion test. The estimated $\theta = 0.79$ corresponds to $\alpha = 1.26$. Earlier, we found a $\alpha = 1.67$ with quadratic formulation. Then, the negative binomial model gives some improvement regarding overdispersion.
+
+
+```{r, include = F}
+reg_nb$theta
+```
+
+
+```{r, include = F}
+alpha_nb <- 1/reg_nb$theta
+alpha_nb
+```
+## Poisson model vs Negative Binomial Model
+
+From table 6, we see that sign of each coefficient is identical and coefficient value are really close to each others. One noticeable thing is that standard error is more than twice higher in Negative Binomial Model. \
+In order to compare those two models, we perform a likelihood-ratio test.
+
+
+
+```{r}
+lrtest(reg, reg_nb) %>% 
+  kable(format = "latex", align = "c", caption = "Likelihood ratio test") %>% 
+  kable_styling(latex_options = c("bordered","striped", "hover", "HOLD_position"), fixed_thead = T)
+  
+```
+
+We conclude that Negative Binomial Model performs better than the Poisson model for our data. 
+
+
+
+# Marginal effect 
+
+```{r, include = F}
+stargazer(reg_nb, type = 'text')
+```
+
+
+The result is shown in table 6. The coefficient associate with the variable `lcoins` has a value of $\approx -0.076$ and is statistically significant at 1\%. Then, each one-unit increase in `lcoins`, the expected log count of the number of visits to a doctor decreases by $0.076$. We can interpret this result as the elasticity of visits to a doctor, according to the coinsurance rate. Then, the elasticity is equal to $-7.6\%$ for the baseline individual. The coefficient associate to `hlthp` is the expected difference in log count between an individual self rating himself in poor health and the reference is a individual rating himself in excellent health. The expected log count for an individual in poor health is 0.899 higher than the expect log count for an individual in excellent health. 
+
+
+# Hurdle Model
+
+```{r, include = F}
+table(data$mdu[data$mdu == 0])
+```
+
+In figure 1, we have seen that our dependent variable was suffering from many zeroes. More exactly, there are $6308$ zeroes in our observation. From this statement, we must use a model which takes into account this. The Hurdle model use different distribution for zero and positive counts. Indeed, we will use a logit model to estimate zero counts and a truncated-at-zero Poisson model for positive counts.
+
+```{r}
+reg_hurdle <- hurdle(mdu ~ lcoins + idp + linc + female + educdec + age + black + hlthg + hlthf + hlthp, data = data, dist = "poisson", link = 'logit')
+```
+
+
+```{r, include = F}
+summary(reg_hurdle)
+```
+
+## Hurdle Model vs Poisson Model
+
+If we compare the Zero Hurdle model with the Poisson model, coefficients regressions from table 6 have the same sign and all statistically significant. Indeed, the intercept is significant conversely to the intercept from Poisson Model. Most of Zero Hurdle coefficients are larger in absolute value than the Poisson Model. Then, our variables may have a more important influence on the decision to not visit a medical doctor than in Poisson Model. Estimated coefficients in Count Hurdle are, in absolute value, lower than in Poisson model. Furthermore, their signs are identical. Our interpretation is that Count Hurdle estimates number of visits for individuals that went at least once to the doctor. Then, our variables have a lesser impact on this case.
+
+## Coefficient interpretation
+
+```{r}
+expCoef <- exp(coef((reg_hurdle)))
+expCoef <- matrix(expCoef, ncol = 2)
+rownames(expCoef) <- names(coef(reg))
+colnames(expCoef) <- c("Count Hurdle","Zero Hurdle")
+expCoef %>% 
+  kable(format = "latex", align = "c", caption = "Coefficients for Hurdle Model") %>% 
+  kable_styling(latex_options = c("bordered","striped", "HOLD_position", "hover"), fixed_thead = T)
+```
+
+For the Zero Hurdle model, the baseline odds of having a positive count of medical visit against no visit is 0.56. This odds is increased by  1.67 times for female. Age does not have a significant impact. Self-rating himself in good health increases it by 2.84 times. For the Count Hurdle Model, among those who have positive counts, the average visits to a doctor is 2.55. This is increased by 1.98 times for being in poor health whereas good health increases it by 1.10. Being black decreases it by 0.71.
+
+## The Vuong Test
+
+In order to choose the best model, we can perform the Vuong Test. The latter is able to compare predicted probabilities of non-nested models, which is our case. Indeed, if we want to compare the Hurdle Model and the Poisson Model, we cannot use the traditional deviance because these two models are not nested within one another.
+
+```{r}
+vuong(reg, reg_hurdle)
+```
+If the two models differ, the p-value would be lower than 0.05. Then, we conclude that Hurdle Model better fits the data than the Poisson Model.
+
+If we compare the Negative binomial model and the Hurdle model we find out that negative binomial is better. 
+
+```{r}
+vuong(reg_nb, reg_hurdle)
+```
+If we stop here, we would choose the negative binomial model.
+
+
+
+## Observed vs Predicted
+
+Table 5 shows the observed versus predicted values for each model. Poisson regression predict badly the number of null visits conversely to Hurdle and Negative binomial model.  However, it is not easy to tell which model predicts the best. Thereby, we will use MSE as metric. For respectively, Poisson, Negative Binomial and Hurdle model we find $2060589$, $522926.5$, $870461.8$ those values for MSE. The lower one is for Negative Binomial model which confirm the Vuong Test.
+
+
+```{r, include = F}
+# poisson predicted
+pred_poi <- rbind(obs = table(data$mdu)[1:13], poi = round(sapply(0:12, function(x) sum(dpois(x, fitted(reg))))))
+
+# nb predicted
+visits <- unique(data$mdu)
+pred_nb <- lapply(visits,
+  function(x){
+    sum(dnbinom(x, mu = fitted(reg_nb), size = reg_nb$theta))})
+pred_nb <- unlist(pred_nb)
+pred_nb <- pred_nb[1:13]
+
+## hurdle predicted
+pred_hurdle <- round(colSums(predict(reg_hurdle, type = "prob")[,1:13]))
+```
+
+
+```{r, include = F}
+final <- round(rbind(pred_poi, pred_nb, pred_hurdle),0)
+final
+```
+```{r, include = F}
+rownames(final) <- c("Observed", "Poisson", "Neg. Binomial", "Hurdle")
+```
+
+```{r, include = F}
+final
+```
+
+```{r}
+final %>% 
+  kable(format = "latex", caption = "Observed vs Predicted") %>% 
+  kable_styling(latex_options = c("hover","striped", "condensed", "HOLD_position"), fixed_thead = T)
+```
+```{r, , include = F}
+mse(final[1,], final[2,])
+mse(final[1,], final[3,])
+mse(final[1,], final[4,])
+```
+
+
+## Visualisation
+
+We can verify our statement graphically, figure 2 shows that Negative Binomial model overlap the observed observations which is a proof of good approximation. Regarding the other two models, they almost overlap the observed curve if the number of visits is superior to eight. As conclusion, in order to have to best explanation of the data, we choose Negative Binomial Model.
+
+```{r}
+po.p <- predprob(reg) %>% colMeans
+po.nb <- predprob(reg_nb) %>% colMeans
+po.hurdle <- predprob(reg_hurdle) %>% colMeans
+df <- data.frame(x = 0:max(data$mdu), Poisson = po.p, 
+                 NegBin = po.nb, Hurdle = po.hurdle)
+
+obs <- table(data$mdu) %>% prop.table() %>% data.frame #Observed
+names(obs) <- c("x", 'Observed')
+
+
+comb <- merge(obs, df, by = 'x', all = T)
+comb[is.na(comb)] <- 0
+
+comb2 <- comb[1:13, ] #just for the first 11 results, including zero
+
+mm <- melt(comb2, id.vars = 'x', value.name = 'prob', variable.name = 'Model')
+
+ggplot(mm, aes(x = x, y = prob, group = Model, col = Model)) +
+  geom_line(aes(lty = Model), lwd = 1) +
+  theme_bw() +
+  labs(x = "Number of visits", y = 'Probability',
+       title = "Models for number of visits to doctor") +
+  scale_color_manual(values = c('black', 'blue', 'red', 'green')) +
+  scale_linetype_manual(values = c('solid', 'dotted', 'dotted', 'dotted')) +
+  theme(legend.position=c(.75, .65), axis.title.y = element_text(angle = 0))
+```
+
+
+
+
+
+\newpage
+
+# Appendix 
+
+\begin{table}[!htbp] \centering 
+
+  \caption{Models} 
+  \begin{tabular}{@{\extracolsep{5pt}}lcccc} 
+  
+  \\[-1.6ex]\hline 
+  \hline \\[-1.6ex] 
+   & \multicolumn{4}{c}{\textit{Dependent variable: mdu}} \\ 
+  \cline{2-5} 
+  
+  \\[-1.6ex] & Poisson & Neg. Binomial & Zero Hurdle & Count Hurdle \\ 
+  
+ 
+  \hline \\[-1.6ex] 
+  
+   lcoins & $-$0.070$^{***}$ & $-$0.076$^{***}$ & $-$0.135$^{***}$ & $-$0.04$^{***}$ \\ 
+    & (0.002) & (0.005) & (0.008) & (0.002) \\ 
+    & & & & \\ 
+   idp1 & $-$0.129$^{***}$ & $-$0.107$^{***}$ & $-$0.273$^{***}$ & $-$0.04$^{***}$ \\ 
+    & (0.01) & (0.022) & (0.037) & (0.01) \\ 
+    & & & & \\ 
+   linc & 0.072$^{***}$ & 0.077$^{***}$ & 0.112$^{***}$ & 0.027$^{***}$ \\ 
+    & (0.005) & (0.009) & (0.014) & (0.005) \\ 
+    & & & & \\ 
+   female1 & 0.290$^{***}$ & 0.279$^{***}$ & 0.512$^{***}$ & 0.15$^{***}$ \\ 
+    & (0.009) & (0.018) & (0.033) & (0.009) \\ 
+    & & & & \\ 
+   educdec & 0.020$^{***}$ & 0.020$^{***}$ & 0.057$^{***}$ & 0.006$^{***}$ \\ 
+    & (0.002) & (0.003) & (0.006) & (0.002) \\ 
+    & & & & \\ 
+   age & 0.004$^{***}$ & 0.004$^{***}$ & 0.003$^{***}$ & 0.004$^{***}$ \\ 
+    & (0.0003) & (0.001) & (0.001) & (0.002) \\ 
+    & & & & \\ 
+   black1 & $-$0.781$^{***}$ & $-$0.806$^{***}$ & $-$1.302$^{***}$ & $-$0.331$^{***}$ \\ 
+    & (0.015) & (0.028) & (0.043) & (0.016) \\ 
+    & & & & \\ 
+   hlthg & 0.116$^{***}$ & 0.093$^{***}$ & 0.103$^{***}$ & 0.096$^{***}$ \\ 
+    & (0.009) & (0.020) & (0.036) & (0.009) \\ 
+    & & & & \\ 
+   hlthf & 0.493$^{***}$ & 0.483$^{***}$ & 0.442$^{***}$ & 0.392$^{***}$ \\ 
+    & (0.015) & (0.036) & (0.067) & (0.016) \\ 
+    & & & & \\ 
+   hlthp & 0.899$^{***}$ & 0.865$^{***}$ & 1.045$^{***}$ & 0.688$^{***}$ \\ 
+    & (0.026) & (0.074) & (0.067) & (0.026) \\ 
+    & & & & \\ 
+   Constant & 0.079$^{*}$ & 0.071 & $-$0.579$^{***}$ & 0.938$^{***}$ \\
+    & (0.045) & (0.087) & (0.142) & (0.046) \\ 
+    & & & & \\ 
+    
+  \hline \\[-1.6ex] 
+  Observations & 20,186 & 20,186 & 20,186 & 20,186 \\ 
+  Log Likelihood & $-$61,903.890 & $-$43,170.570 & $-$54,823.050 & $-$54,823.050s \\ 
+  $\theta$ &  & 0.794$^{***}$  (0.011) &  & \\ 
+  Akaike Inf. Crit. & 123,829.800 & 86,363.140 & & \\ 
+  
+  \hline 
+  \hline \\[-1.6ex] 
+  \textit{Note:}  & \multicolumn{4}{r}{$^{*}$p$<$0.1; $^{**}$p$<$0.05; $^{***}$p$<$0.01} \\ 
+  
+  \end{tabular} 
+    
+\end{table} 
